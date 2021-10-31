@@ -2,6 +2,25 @@ library(rvest)
 library(XMl)
 library(stringr)
 library(dplyr)
+library(RSQLite)
+library(DBI)
+
+#db connection
+conn = dbConnect(RSQLite::SQLite(), "J:/R PROJECTS/lubimyczytac/lc.db")
+
+#create table if needed
+dbExecute(conn,
+          "CREATE TABLE IF NOT EXISTS BOOKS  (
+          ID INT PRIMARY KEY NOT NULL,
+          AUTOR TEXT NOT NULL,
+          TYTUL TEXT NOT NULL,
+          LICZBA_OCEN INT NOT NULL,
+          SREDNIA_OCEN INT NOT NULL,
+          SERIA TEXT,
+          URL TEXT,
+          RODZAJ INT
+          )")
+
 
 
 extract_sth = function(url, nodes) {
@@ -10,16 +29,18 @@ extract_sth = function(url, nodes) {
 }
 
 
+
+url_to_cat = "https://lubimyczytac.pl/katalog/kategoria/53?page=15&listId=booksFilteredList&category[]=53&rating[]=7&rating[]=10&publishedYear[]=2018&publishedYear[]=2021&catalogSortBy=ratings-desc&paginatorType=Standard"
 #extract list of categories
-list_cats = read_html(url) %>% html_nodes('.filtr__item') %>% html_nodes('.filtr__itemLabel') %>% html_elements("input") %>%
+list_cats = read_html(url_to_cat) %>% html_nodes('.filtr__item') %>% html_nodes('.filtr__itemLabel') %>% html_elements("input") %>%
   html_attrs() %>% bind_rows(.) %>% filter(class == "filtr__itemCheckbox catsuball js-inputSubcat")
+list_cats = list_cats %>% select(value, `category-name`)
+dbWriteTable(conn, "CATEGORIES", list_cats)
 
 
-
-
-year_from = 2018
+year_from = 1900
 year_to = 2021
-min_rating = 7
+min_rating = 6
 max_rating = 10
 category_id = 53
 
@@ -45,7 +66,7 @@ if (length(max_page) == 0) {
 }
 
 
-for (i in 1:max_page) {
+for (i in 1:10) {
   
   url = gsub('(page=)(\\d+)', paste0("page=", i), url)
   print(url)
@@ -83,21 +104,41 @@ for (i in 1:max_page) {
   episode_list = episode_list[-to_remove]
   
   
+  ids = unlist(lapply(links, function(x) str_split(x, "/")))
+  ids = ids[seq(5,length(ids), 6)]
   
   
   
   
   
-  
-  temp_tbl = data.frame("AUTOR" = authors, "TYTUL" = titles, "LICZBA_OCEN" = rating_count, "SREDNIA_OCEN" = rating, 
+  temp_tbl = data.frame("ID" = ids, "AUTOR" = authors, "TYTUL" = titles, 
+                        "LICZBA_OCEN" = rating_count, "SREDNIA_OCEN" = rating, 
                         "SERIA" = episode_list, "URL" = links, 
-                        "RODZAJ" = list_cats[list_cats$value == category_id,]$`category-name`)
+                        "RODZAJ" = category_id)
   
-  full_tbl = rbind(full_tbl, temp_tbl)
+  #write table to SQL
+  for (k in 1:nrow(temp_tbl)) {
+    ifexists = dbGetQuery(conn, paste0("SELECT 1 FROM BOOKS WHERE ID = ", temp_tbl[k,1]))
+    if (nrow(ifexists)==0) {
+      dbExecute(conn, "INSERT INTO BOOKS VALUES (?, ?, ?, ?, ?, ?, ?, ?)", params = unlist(temp_tbl[k,], use.names = F))
+      
+    } else {
+      dbExecute(conn, "UPDATE BOOKS SET LICZBA_OCEN = ?, SREDNIA_OCEN = ? WHERE ID = ?", params = c(temp_tbl[k,4], temp_tbl[k,5], temp_tbl[k,1]))
+      
+    }
+    
+    
+    
+  }
   
-  Sys.sleep(1)
   
-  print(i)
+  
+  
+  #full_tbl = rbind(full_tbl, temp_tbl)
+  
+  Sys.sleep(0.3)
+  
+  
   
   
 }
